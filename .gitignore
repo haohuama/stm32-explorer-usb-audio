@@ -1,0 +1,36 @@
+# ===== Keil MDK 构建产物 =====
+Output/
+Objects/
+Listings/
+DebugConfig/
+RTE/
+*.axf
+*.o
+*.d
+*.crf
+*.dep
+*.lnp
+*.lst
+*.map
+*.htm
+*.build_log.htm
+*.uvguix.*
+*.scvd
+
+# ===== Python =====
+__pycache__/
+*.pyc
+
+# ===== 音频/媒体（版权+大文件，不入库）=====
+Tools/*.wav
+Tools/*.mp3
+Tools/*.flac
+
+# ===== 临时/系统 =====
+_pnp*.txt
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ===== 第三方模板自带 readme（正点原子蜂鸣器例程，非本项目内容）=====
+readme.txt
