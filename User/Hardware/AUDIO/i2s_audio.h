@@ -54,6 +54,19 @@ int audio_stream_push(const uint8_t *data, uint32_t len);
 /* 当前环形缓冲已缓存字节数（调试用） */
 uint32_t audio_stream_available(void);
 
+/* LCD 歌词时间轴：DMA 实际消费的 PCM 字节总数（单调递增、只读）。
+ * 由 stream_fill_half() 每次 refill 累加，代表真播出去的字节数。
+ * 比 HAL_GetTick() 准：欠载/暂停/切源都不会让歌词进度漂移。
+ * 音频输出链行为完全不变，仅新增一个计数器。 */
+uint32_t audio_stream_consumed_bytes(void);
+void     audio_stream_reset_consumed(void);
+
+/* 歌词同步用：已播放时长(ms)，以"第一次出现真实 PCM 数据"为 0 点。
+ * 断流超过约 0.8s 后再来数据会自动重新取 0 点（暂停/重放/换曲都能对齐）。
+ * 与墙钟无关，也不受"开机后多久才点播放"影响。 */
+uint32_t audio_stream_position_ms(void);
+void     audio_stream_reset_position(void);
+
 /* 供外部读取的两个句柄（调试用） */
 extern I2S_HandleTypeDef g_i2s2_handle;
 extern DMA_HandleTypeDef g_i2s2_tx_dma;

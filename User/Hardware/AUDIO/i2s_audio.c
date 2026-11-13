@@ -33,6 +33,18 @@ static uint8_t  s_ring[AUDIO_RING_SIZE];
 static volatile uint32_t s_ring_w = 0;
 static volatile uint32_t s_ring_r = 0;
 static uint8_t  s_stream_on = 0;
+/* LCD 歌词时间轴：DMA 累计消费的 PCM 字节数（只在 DMA 回调里累加，主循环只读）
+ * 用 uint32_t 保证 32 位 MCU 上读/写原子；176400 B/s 下约 6.7 小时才回绕，够用。 */
+static volatile uint32_t s_consumed_bytes = 0;
+
+/* ---- 歌词同步（见 stream_fill_half）----------------------------------
+ * 问题：DMA 从开机就在跑（没数据时播静音），若只按"已消费字节"计时，
+ * 点播放之前的时间也被算进去 → 歌词全程提前。
+ * 解法：s_pos_bytes 只累计真实 PCM 字节（静音不计），断流 >1.5s 视为重新播放。 */
+static volatile uint32_t s_pos_bytes  = 0;    /* 真实 PCM 累计字节（歌词时间轴） */
+static volatile uint8_t  s_idle_cnt   = 0;    /* 连续欠载的 refill 次数 */
+
+#define AUDIO_IDLE_RESYNC   65u               /* 65 × 23ms ≈ 1.5s 断流后清零重来 */
 
 /* 32 点正弦表：sin(2πk/32) × 32767，末位补一个 0 便于插值取 idx+1 */
 static const int16_t s_sin_tab[33] = {
@@ -221,6 +233,47 @@ static void stream_fill_half(uint16_t *dst, uint32_t half_len)
         s_ring_r = (s_ring_r + 1u) & AUDIO_RING_MASK;
     }
     for (; i < need; i++) d[i] = 0;
+
+    /* 歌词时间轴：只累计【真实 PCM】的字节数（n），静音填充（need-n）不计时。
+     * 好处：
+     *   - 软件启动后多久才点播放都无所谓，第一块真实数据才是 0 点；
+     *   - 中途卡顿/欠载时歌词自动"停住"，恢复后继续对齐，不会越走越偏；
+     *   - 断流超过约 1.5 秒再恢复，视为重新开始播放，时间轴清零。 */
+    if (n > 0u) {
+        if (s_idle_cnt >= AUDIO_IDLE_RESYNC) s_pos_bytes = 0;
+        s_pos_bytes += n;
+        s_idle_cnt = 0;
+    } else if (s_idle_cnt < 255u) {
+        s_idle_cnt++;
+    }
+
+    /* LCD 歌词时间轴：本次 refill 意味着 DMA 已播完 need 字节。
+     * 中断里只做一次 32bit 加法（原子、极快），不做任何 UI/文件操作。 */
+    s_consumed_bytes += need;
+}
+
+/* 已播放时长(ms)：只按真实 PCM 计时，静音/欠载不计。
+ * 与歌声用的是同一份数据，因此天然同步。 */
+uint32_t audio_stream_position_ms(void)
+{
+    return (uint32_t)(((uint64_t)s_pos_bytes * 1000u) / (uint32_t)(AUDIO_SAMPLE_RATE * 4u));
+}
+
+/* 换曲/重放时把歌词时间轴清零（由主循环在收到"选曲"信号后调用） */
+void audio_stream_reset_position(void)
+{
+    s_pos_bytes = 0;
+    s_idle_cnt  = 0;
+}
+
+uint32_t audio_stream_consumed_bytes(void)
+{
+    return s_consumed_bytes;
+}
+
+void audio_stream_reset_consumed(void)
+{
+    s_consumed_bytes = 0;
 }
 
 /* DMA 半传输完成：第一半刚播完 → 填第一半 */
@@ -275,6 +328,9 @@ void audio_stream_start(void)
     /* 双缓冲先清零（静音），环形清空 */
     for (i = 0; i < (AUDIO_STREAM_HALF_LEN * 2u); i++) s_stream_buf[i] = 0;
     s_ring_r = s_ring_w = 0;
+    s_consumed_bytes = 0;      /* 每次重新启流，歌词时间轴归零 */
+    s_pos_bytes = 0;
+    s_idle_cnt  = 0;
     s_stream_on = 1;
 
     /* 以整块双缓冲为单位做循环传输；HAL 在 HT/TC 回调里 refill */

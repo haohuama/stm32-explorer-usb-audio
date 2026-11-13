@@ -27,7 +27,8 @@ Tools/*.mp3
 Tools/*.flac
 
 # ===== 临时/系统 =====
-_pnp*.txt
+_*.txt            # 智能体排查用的临时探测文件（_p2.txt / _pnp*.txt 等）
+_*.md             # 文档草稿片段（_s14.md 之类，内容已并入 docs/）
 Thumbs.db
 .DS_Store
 desktop.ini

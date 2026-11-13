@@ -17,6 +17,7 @@
 #include "usbd_cdc_if.h"
 #include "usb_device.h"   /* hUsbDeviceFS */
 #include "i2s_audio.h"    /* audio_stream_push() */
+#include "lcd_ui.h"       /* lcd_ui_select_song()：用 DTR/RTS 选曲 */
 
 /* 前向声明：USBD_CDC_fops_FS 初始化器在下方引用，必须在之前可见 */
 static int8_t CDC_Init_FS(void);
@@ -74,11 +75,30 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t *pbuf, uint16_t length)
   switch (cmd)
   {
     case CDC_SET_LINE_CODING:
-      linecoding.bitrate    = (uint32_t)(pbuf[0] | (pbuf[1] << 8) |
-                                         (pbuf[2] << 16) | (pbuf[3] << 24));
+      if (pbuf == NULL || length < 7u) break;
+      linecoding.bitrate    = (uint32_t)pbuf[0] | ((uint32_t)pbuf[1] << 8) |
+                              ((uint32_t)pbuf[2] << 16) | ((uint32_t)pbuf[3] << 24);
       linecoding.format     = pbuf[4];
       linecoding.paritytype = pbuf[5];
       linecoding.datatype   = pbuf[6];
+      /* 选曲（主通道，可扩展到任意首数）：上位机把 ser.baudrate 设成 100000+idx，
+       * 驱动就会发这条请求。只有落在 [100000,100000+16) 才当选曲，其余忽略。
+       * 纯 USB 控制请求，占 0 字节音频带宽。 */
+      if (linecoding.bitrate >= 100000u && linecoding.bitrate < (100000u + 16u)) {
+        lcd_ui_select_song((uint8_t)(linecoding.bitrate - 100000u));
+      }
+      break;
+
+    case CDC_SET_CONTROL_LINE_STATE:
+      /* 兼容通道：wValue bit0 = DTR，bit1 = RTS，可表达第 1..3 首。
+       * usbd_cdc.c 在 wLength==0 时把整个 Setup 包指针当 pbuf 传进来。
+       * 3（DTR|RTS 都置位）是端口刚打开时的默认态，必须忽略。 */
+      if (pbuf != NULL) {
+        uint16_t wv = ((USBD_SetupReqTypedef *)pbuf)->wValue;
+        if ((wv & 0x0003u) < 3u) {
+          lcd_ui_select_song((uint8_t)(wv & 0x0003u));
+        }
+      }
       break;
 
     case CDC_GET_LINE_CODING:
