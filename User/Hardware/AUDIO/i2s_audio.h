@@ -65,7 +65,15 @@ void     audio_stream_reset_consumed(void);
  * 断流超过约 0.8s 后再来数据会自动重新取 0 点（暂停/重放/换曲都能对齐）。
  * 与墙钟无关，也不受"开机后多久才点播放"影响。 */
 uint32_t audio_stream_position_ms(void);
+
+/* 软件音量（0~63，DMA refill 里定点乘法，不依赖 CODEC 的 I2C）。
+ * 与 WM8978 的 SPK 音量是两级串联：这里管数字，那里管模拟。 */
+void audio_stream_set_volume(uint8_t vol);
+uint8_t audio_stream_volume(void);
 void     audio_stream_reset_position(void);
+/* 由上位机在 seek/倍速/切歌后下发的「歌词时间轴基准」（ms）。
+ * 注意：这里传的是**已按倍速缩放过**的时间，和设备上那份 LRC 的时间戳同尺度。 */
+void     audio_stream_set_position(uint32_t ms);
 
 /* 供外部读取的两个句柄（调试用） */
 extern I2S_HandleTypeDef g_i2s2_handle;

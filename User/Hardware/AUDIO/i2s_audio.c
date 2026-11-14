@@ -42,6 +42,9 @@ static volatile uint32_t s_consumed_bytes = 0;
  * 点播放之前的时间也被算进去 → 歌词全程提前。
  * 解法：s_pos_bytes 只累计真实 PCM 字节（静音不计），断流 >1.5s 视为重新播放。 */
 static volatile uint32_t s_pos_bytes  = 0;    /* 真实 PCM 累计字节（歌词时间轴） */
+/* 软件音量：Q8 定点（256 = 0dB）。默认 0xB0≈0.69，先给功放留余量，治"炸"。 */
+static volatile uint16_t s_sw_gain    = 0x61u;   /* 38/100 -> 0.38x，默认别太吵 */
+static volatile uint8_t  s_sw_vol     = 38u;
 static volatile uint8_t  s_idle_cnt   = 0;    /* 连续欠载的 refill 次数 */
 
 #define AUDIO_IDLE_RESYNC   65u               /* 65 × 23ms ≈ 1.5s 断流后清零重来 */
@@ -228,9 +231,33 @@ static void stream_fill_half(uint16_t *dst, uint32_t half_len)
     /* 有多少填多少，不足部分补静音。
      * （原来"不足就整半静音"会在缓冲临界点造成整段 23ms 静音跳变 → 间断；
      *   现在欠载只丢缺失的那点，听感是极短空白，不会整块静音。） */
-    for (i = 0; i < n; i++) {
-        d[i] = s_ring[s_ring_r];
-        s_ring_r = (s_ring_r + 1u) & AUDIO_RING_MASK;
+    /* 软件音量：逐 16bit 样本做 (v*g)>>8。g=256 时就是直通，
+     * 乘法只在有真实数据时跑（2048 样本/23ms ≈ 0.8% CPU），不影响时序。 */
+    {
+        uint16_t g = s_sw_gain;
+
+        if (g == 256u) {
+            for (i = 0; i < n; i++) {
+                d[i] = s_ring[s_ring_r];
+                s_ring_r = (s_ring_r + 1u) & AUDIO_RING_MASK;
+            }
+        } else {
+            uint32_t k = 0;
+            for (i = 0; i < n; i++) {
+                d[i] = s_ring[s_ring_r];
+                s_ring_r = (s_ring_r + 1u) & AUDIO_RING_MASK;
+                k++;
+                if (k == 2u) {                       /* 凑够一个 16bit 样本 */
+                    int32_t v = (int16_t)((uint16_t)d[i - 1u] | ((uint16_t)d[i] << 8));
+                    v = (v * (int32_t)g) >> 8;
+                    if (v > 32767) v = 32767;
+                    if (v < -32768) v = -32768;
+                    d[i - 1u] = (uint8_t)((uint16_t)v & 0xFFu);
+                    d[i]      = (uint8_t)(((uint16_t)v >> 8) & 0xFFu);
+                    k = 0;
+                }
+            }
+        }
     }
     for (; i < need; i++) d[i] = 0;
 
@@ -254,15 +281,48 @@ static void stream_fill_half(uint16_t *dst, uint32_t half_len)
 
 /* 已播放时长(ms)：只按真实 PCM 计时，静音/欠载不计。
  * 与歌声用的是同一份数据，因此天然同步。 */
+void audio_stream_set_volume(uint8_t vol)
+{
+    if (vol > 100u) vol = 100u;
+    s_sw_vol  = vol;
+    /* 0~100 线性映射到 Q8 增益 0..256：0=静音，100=0dB 直通。
+     * 之前是 0~63、每次 ±4（只有 16 档），现在 101 档、每次 ±1。 */
+    s_sw_gain = (uint16_t)(((uint32_t)vol * 256u) / 100u);
+}
+
+uint8_t audio_stream_volume(void) { return s_sw_vol; }
+
 uint32_t audio_stream_position_ms(void)
 {
     return (uint32_t)(((uint64_t)s_pos_bytes * 1000u) / (uint32_t)(AUDIO_SAMPLE_RATE * 4u));
 }
 
-/* 换曲/重放时把歌词时间轴清零（由主循环在收到"选曲"信号后调用） */
+/* 换曲/重放时把歌词时间轴归零。
+ * ⚠️ 时序坑：上位机 select_slot() 只是置了 UI 的 pending 标志，真正的清零发生在
+ *    下一次 lcd_ui_tick()；而 T_POS（seek 后的时间轴基准）在这之前就被 cdc_ctrl
+ *    消费了。如果这里无条件清 0，基准会被冲掉，seek 后歌词又提前。
+ *    解法：set_position() 记下一次性基准 s_start_ms，这里的「清零」回到该基准。 */
+static volatile uint32_t s_start_ms = 0;
+
 void audio_stream_reset_position(void)
 {
-    s_pos_bytes = 0;
+    if (s_start_ms != 0u) {
+        s_pos_bytes = (uint32_t)(((uint64_t)s_start_ms
+                                 * (uint32_t)(AUDIO_SAMPLE_RATE * 4u)) / 1000u);
+        s_start_ms  = 0;                 /* 一次性，用完即弃 */
+    } else {
+        s_pos_bytes = 0;
+    }
+    s_idle_cnt  = 0;
+}
+
+void audio_stream_set_position(uint32_t ms)
+{
+    /* ms -> 字节：176400 B/s（44.1k * 2ch * 2B），64 位避免溢出。
+     * 上位机 seek / 换倍速 / 切歌后调用；传进来的是「已按倍速缩放」的时间，
+     * 与下发到设备的那份 LRC 时间戳同尺度。 */
+    s_start_ms  = ms;                 /* 供紧接着的 reset_position() 保住基准 */
+    s_pos_bytes = (uint32_t)(((uint64_t)ms * (uint32_t)(AUDIO_SAMPLE_RATE * 4u)) / 1000u);
     s_idle_cnt  = 0;
 }
 

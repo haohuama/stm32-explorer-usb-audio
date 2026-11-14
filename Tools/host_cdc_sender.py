@@ -20,10 +20,16 @@
 #   --gain        发送前音量增益倍数（默认 10.0；1.0＝不处理；放大会硬限幅）
 #   --auto        自动按 VID_0483 / PID_5722 查找 CDC 虚拟串口，忽略 -p
 #   --wait        端口不存在时持续等待（板子未枚举/按了 RESET 时用）；配合断线重连
+#   --playlist    直接用本工程 Tools/pl01.wav ... plNN.wav（按序号排序），免去逐个 -f
+#   --lrc/--cover/--title/--artist
+#                 播放前把这些内容经同一条 USB 线下发给设备（换歌词/封面不用重烧固件）
+#   --meta-for    这些内容属于第几首（0 基，默认=第一个 WAV 的序号）
+#   --keys        接收板子按键命令（KEY0 长按=播放/暂停，KEY0/1 短按=下一首/重播）
 # ============================================================
 import os
 import re
 import sys
+import glob
 import time
 import wave
 import array
@@ -35,19 +41,38 @@ CDC_VID = 0x0483
 CDC_PID = 0x5722
 
 
+KNEE = 0.70 * 32767.0          # 软膝起点：到这里开始平滑压缩
+FS = 32767.0
+
+
 def apply_gain(data, gain):
-    """把 16bit 小端交错 PCM 字节按 gain 放大，并硬限幅到 int16 范围 [-32768,32767]，
-    防止数值溢出回绕（回绕会产生刺耳爆音）。左右声道同倍数，立体声关系不变。"""
+    """按 gain 放大 + **软膝限幅**（不是硬削波）。
+
+    为什么改：以前是"超了就砍平"，满量程的流行歌被放大后大量样本贴顶，
+    听感就是"炸/发毛"。现在超过 70% 满量程以后用 tanh 平滑逼近满量程，
+    谐波少得多，声音仍有冲击力但不会破。
+    左右声道同倍数、逐样本独立处理，立体声关系不变。"""
+    import math
     a = array.array('h')
     a.frombytes(data)
+    rng = FS - KNEE
     for i in range(len(a)):
-        v = int(a[i] * gain)
-        if v > 32767:
-            v = 32767
-        elif v < -32768:
-            v = -32768
-        a[i] = v
+        x = a[i] * gain
+        ax = -x if x < 0 else x
+        if ax > KNEE:
+            y = KNEE + rng * math.tanh((ax - KNEE) / rng)
+            x = -y if x < 0 else y
+        a[i] = int(x)
     return a.tobytes()
+
+
+def gain_for_peak(peak, target_db, base_gain=1.0, cap=4.0):
+    """按源文件峰值算一个让峰值落在 target_db 的增益（默认 -3dBFS 留余量）。"""
+    if peak <= 0:
+        return base_gain
+    tgt = 10.0 ** (target_db / 20.0) * 32767.0
+    g = base_gain * tgt / float(peak)
+    return min(g, cap)
 
 
 def check_wav(path):
@@ -117,6 +142,176 @@ def open_serial(port, baud):
     return serial.Serial(port, baud, timeout=1, write_timeout=None)
 
 
+CDC_CTRL_BAUD = 200000          # 与固件 cdc_ctrl.h 的 CDC_CTRL_BAUD 一致
+FR_SONG, FR_LRC, FR_LRC_END, FR_COVER_ROW = 0x01, 0x02, 0x03, 0x04
+
+
+def _frame(ser, ftype, payload):
+    """ATK + type + len(LE16) + payload"""
+    ser.write(b"ATK" + bytes([ftype, len(payload) & 0xFF, (len(payload) >> 8) & 0xFF]) + payload)
+
+
+def read_lrc_text(path):
+    """自适应编码读文本（UTF-8/BOM/GBK 都试），后面统一转 GBK 发下去。"""
+    raw = open(path, "rb").read()
+    for enc in ("utf-8-sig", "utf-8", "gbk", "big5"):
+        try:
+            return raw.decode(enc)
+        except Exception:
+            pass
+    return raw.decode("utf-8", "ignore")
+
+
+def send_song_extras(ser, song_idx, lrc_path=None, cover_path=None, title=None, artist=None):
+    """控制模式下把 歌名/歌手 + 歌词 + 封面 发给设备。
+
+    时序：波特率设成 200000 → 设备进控制模式 → 发帧 → 设回 115200 → 恢复 PCM。
+    播放期间设备完全不解析帧，所以这条通道不影响音频链路。
+    """
+    ser.baudrate = CDC_CTRL_BAUD
+    time.sleep(0.06)                      # 等 SET_LINE_CODING 生效
+
+    t = (title or "").encode("gbk", "replace")[:40]
+    a = (artist or "").encode("gbk", "replace")[:40]
+    _frame(ser, FR_SONG, bytes([song_idx & 0xFF, len(t)]) + t + bytes([len(a)]) + a)
+
+    if lrc_path and os.path.exists(lrc_path):
+        data = read_lrc_text(lrc_path).encode("gbk", "replace")
+        for i in range(0, len(data), 480):
+            _frame(ser, FR_LRC, data[i:i + 480])
+        _frame(ser, FR_LRC_END, b"")
+        print("  已下发歌词 %d 字节 (%s)" % (len(data), os.path.basename(lrc_path)), flush=True)
+
+    if cover_path and os.path.exists(cover_path):
+        try:
+            from PIL import Image
+            im = Image.open(cover_path).convert("RGB")
+            w, h = im.size
+            s0 = min(w, h)
+            im = im.crop(((w - s0) // 2, (h - s0) // 2,
+                          (w - s0) // 2 + s0, (h - s0) // 2 + s0)).resize((240, 240))
+            px = im.tobytes()
+            for row in range(240):
+                out = bytearray([row & 0xFF, row >> 8])
+                base = row * 240 * 3
+                for x in range(240):
+                    r = px[base + x * 3]
+                    g = px[base + x * 3 + 1]
+                    b = px[base + x * 3 + 2]
+                    v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+                    out += bytes([v & 0xFF, v >> 8])
+                _frame(ser, FR_COVER_ROW, bytes(out))
+                if row % 40 == 0:
+                    time.sleep(0.005)     # 有硬件流控，这里只是保险
+            print("  已下发封面 240x240 (%s)" % os.path.basename(cover_path), flush=True)
+        except Exception as e:
+            print("  封面上传失败:", e)
+
+    ser.baudrate = 115200
+    time.sleep(0.06)
+
+
+class KeyState(object):
+    """板子 -> 电脑的 CDC 上行命令。
+
+      'P' 暂停 / 'R' 继续 / 'N' 下一首 / 'B' 上一首
+      'S' + 1 字节 idx  = 屏上切到了第 idx 首（0 基），电脑要跳到对应 WAV。
+       这条是「切到哪首歌词就唱哪首」的关键：以前屏上切歌只换歌词不换声音。
+    """
+    def __init__(self):
+        import threading
+        self.paused = False
+        self.next_req = False
+        self.prev_req = False
+        self.abs_req = None
+        self._stop = False
+        self._lock = threading.Lock()
+
+    def start(self, ser):
+        import threading
+        self._th = threading.Thread(target=self._run, args=(ser,), daemon=True)
+        self._th.start()
+
+    def stop(self):
+        self._stop = True
+
+    def _run(self, ser):
+        want_idx = False
+        while not self._stop:
+            try:
+                c = ser.read(1)
+            except Exception:
+                return
+            if not c:
+                continue
+            with self._lock:
+                if want_idx:
+                    want_idx = False
+                    self.abs_req = c[0]
+                    print("\n[KEY] 屏幕切到第 %d 首 -> 电脑换歌" % (c[0] + 1), flush=True)
+                    continue
+                if c == b"S":
+                    want_idx = True
+                elif c == b"P":
+                    self.paused = True
+                    print("\n[KEY] 暂停", flush=True)
+                elif c == b"R":
+                    self.paused = False
+                    print("\n[KEY] 继续", flush=True)
+                elif c == b"N":
+                    self.next_req = True
+                    print("\n[KEY] 下一首", flush=True)
+                elif c == b"B":
+                    self.prev_req = True
+                    print("\n[KEY] 上一首", flush=True)
+
+    def wait_if_paused(self):
+        """暂停时挂起，返回暂停了多久（秒），供上层平移时间基准。"""
+        import time
+        if not self.paused:
+            return 0.0
+        t0 = time.monotonic()
+        while self.paused and not self._stop:
+            time.sleep(0.02)
+        return time.monotonic() - t0
+
+    def take(self):
+        """-> (下一首, 上一首, 绝对索引或 None)"""
+        with self._lock:
+            n, p, a = self.next_req, self.prev_req, self.abs_req
+            self.next_req = self.prev_req = False
+            self.abs_req = None
+        return n, p, a
+
+
+def _boost_timer_resolution():
+    """Windows：把系统定时器精度从 15.6ms 提到 1ms。
+
+    USB 音频要每 23ms 送一批 4KB，15.6ms 的粒度会让实际间隔在
+    23ms 和 31ms 之间跳变，直接把设备端环形缓冲打干/打满 -> 咔哒声。
+    """
+    try:
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+        return True
+    except Exception:
+        return False
+
+
+def sleep_until(t_end):
+    """精确睡到绝对时刻 t_end（time.monotonic() 口径，单位秒）。
+
+    前段用 sleep（省 CPU），最后 2.5ms 自旋（拿微秒级精度）。
+    单次调用自旋 <=2.5ms，占空比约 10%，只用一个核。
+    """
+    while True:
+        rem = t_end - time.monotonic()
+        if rem <= 0.0:
+            return
+        if rem > 0.0035:
+            time.sleep(rem - 0.0025)
+
+
 def song_index_of(path, fallback):
     """从文件名末尾数字推断曲目序号(0 基)：pl01.wav -> 0, pl02.wav -> 1。"""
     stem = os.path.splitext(os.path.basename(path))[0]
@@ -150,46 +345,91 @@ def select_song(ser, idx):
 
 
 def stream_playlist(ser, playlist, args, eff_rate, gap_silence):
-    """按列表顺序发送全部 WAV；绝对时间调度跨曲目连续，切歌插入短静音防爆音。
-    正常播完整个列表返回 True；异常时抛给外层重连。"""
+    """按列表播放；支持设备端 'S'+idx 跳到任意曲目（屏上切歌 -> 真的换 WAV）。
+
+    绝对时间调度跨曲目连续；切歌插一小段静音防爆音。
+    正常播完整个列表返回 True；异常时抛给外层重连。
+    """
     chunk_frames = 1024  # 每次读 1024 帧 ≈ 23ms
     next_t = time.monotonic()
+    meta_sent = False
+    prefilled = False
+    key_state = None
+    if getattr(args, 'keys', False):
+        key_state = KeyState()
+        key_state.start(ser)
+
+    n = len(playlist)
+    cur = 0                       # 0 基当前曲目
 
     while True:
-        for idx, path in enumerate(playlist, 1):
-            wf = wave.open(path, "rb")
-            print("[%d/%d] 正在播放: %s" % (idx, len(playlist), os.path.basename(path)), flush=True)
-            # 通知 MCU 当前曲目序号（0 基）→ 切歌词 + 歌词时钟清零
-            select_song(ser, song_index_of(path, idx - 1))
-            while True:
-                data = wf.readframes(chunk_frames)
-                if not data:
+        path = playlist[cur]
+        idx = cur + 1             # 打印用 1 基
+        wf = wave.open(path, "rb")
+        print("[%d/%d] 正在播放: %s" % (idx, n, os.path.basename(path)), flush=True)
+        # 通知 MCU 当前曲目序号 -> 切歌词 + 歌词时钟清零（与音频同源，天然同步）
+        si = song_index_of(path, cur)
+        select_song(ser, si)
+        if args.lrc or args.cover or args.title or args.artist:
+            if (args.meta_for is None or si == args.meta_for) and not meta_sent:
+                send_song_extras(ser, si, args.lrc, args.cover, args.title, args.artist)
+                meta_sent = True
+        if not prefilled:
+            pf = float(getattr(args, "prefill", 0.0) or 0.0)
+            if pf > 0.0:
+                pre = wf.readframes(int(44100 * pf))
+                if pre:
+                    ser.write(pre)
+                    next_t = time.monotonic()
+                    print("  预灌 %.0fms 音频（%d 字节）" % (pf * 1000, len(pre)), flush=True)
+            prefilled = True
+
+        jump = None               # 本曲因为「切歌」提前结束时要去哪
+        while True:
+            if key_state is not None:
+                next_t += key_state.wait_if_paused()   # 暂停期间不推进发送进度
+                _n, _p, _a = key_state.take()
+                if _a is not None:
+                    jump = _a % n                      # 屏幕指定了绝对曲目
                     break
-                if args.gain != 1.0:
-                    data = apply_gain(data, args.gain)
-                ser.write(data)
-                next_t += len(data) / eff_rate
-                dt = next_t - time.monotonic()
-                if dt > 0:
-                    time.sleep(dt)   # dt<=0 表示已落后，立即继续下一批追赶
-            wf.close()
+                if _p:
+                    jump = (cur - 1) % n
+                    break
+                if _n:
+                    jump = (cur + 1) % n
+                    break
+            data = wf.readframes(chunk_frames)
+            if not data:
+                break
+            g_now = getattr(args, "gains", {}).get(path, args.gain)
+            if g_now != 1.0:
+                data = apply_gain(data, g_now)
+            ser.write(data)
+            next_t += len(data) / eff_rate
+            if next_t > time.monotonic():
+                sleep_until(next_t)
+        wf.close()
 
-            # 曲目之间插一小段静音：保持设备端环形缓冲有数据（不欠载），
-            # 同时避免两首歌首尾样本直接拼接产生咔哒声。
-            if gap_silence:
-                ser.write(gap_silence)
-                next_t += len(gap_silence) / eff_rate
-                gap_dt = next_t - time.monotonic()
-                if gap_dt > 0:
-                    time.sleep(gap_dt)
-            print("[%d/%d] 播放结束" % (idx, len(playlist)), flush=True)
+        # 曲目之间插一小段静音：保持环形缓冲有数据，避免首尾样本直接拼接
+        if gap_silence:
+            ser.write(gap_silence)
+            next_t += len(gap_silence) / eff_rate
+            if next_t > time.monotonic():
+                sleep_until(next_t)
+        print("[%d/%d] 播放结束" % (idx, n), flush=True)
 
-        if args.no_loop:
-            return True
-        print("---- 列表播完，回到第 1 首循环 ----", flush=True)
+        if jump is not None:
+            cur = jump
+        else:
+            cur = (cur + 1) % n
+            if cur == 0 and args.no_loop:
+                return True
+            if cur == 0:
+                print("---- 列表播完，回到第 1 首循环 ----", flush=True)
 
 
 def main():
+    _boost_timer_resolution()          # 1ms 定时器精度（治「炸」的关键一步）
     ap = argparse.ArgumentParser(description="Send 44.1k/16bit/stereo WAV(s) over CDC serial to STM32")
     ap.add_argument("-p", "--port", default="COM3", help="serial port, e.g. COM3 or /dev/ttyACM0")
     ap.add_argument("-f", "--file", nargs="+", default=["music.wav"],
@@ -198,15 +438,37 @@ def main():
     ap.add_argument("--no-loop", action="store_true", help="stop after the whole playlist instead of looping")
     ap.add_argument("--rate", type=float, default=1.0,
                     help="发送速率倍数（默认 1.0；偶尔断音调到 1.002~1.005，偶尔爆音调到 0.998）")
-    ap.add_argument("--gain", type=float, default=10.0,
-                    help="发送前音量增益倍数（默认 10.0；1.0=不处理；放大会硬限幅防爆音）")
+    ap.add_argument("--gain", type=float, default=1.0,
+                    help="额外音量倍数（默认 1.0）。以前默认 10 倍会把满量程歌直接削爆，已改")
+    ap.add_argument("--peak", type=float, default=-3.0,
+                    help="自动归一的目标峰值 dBFS（默认 -3，留余量不炸）；--no-norm 可关闭")
+    ap.add_argument("--no-norm", action="store_true", help="不做峰值归一，只按 --gain 处理")
     ap.add_argument("--auto", action="store_true",
                     help="自动按 VID_0483/PID_5722 查找 CDC 虚拟串口（COM 号变了也不怕）")
     ap.add_argument("--wait", action="store_true",
                     help="端口不存在时持续等待；播放中掉线（如按 RESET）自动重连从头续播")
+    ap.add_argument("--lrc", default=None, help="歌词文件，播放前经 USB 下发（不用重烧固件）")
+    ap.add_argument("--cover", default=None, help="封面图片 jpg/png/bmp，同上")
+    ap.add_argument("--title", default=None, help="下发的歌名（需 GBK 可编码）")
+    ap.add_argument("--artist", default=None, help="下发的歌手")
+    ap.add_argument("--keys", action="store_true",
+                    help="接收板子按键命令：长按 KEY0=播放/暂停，短按 KEY0/1=下一首/重播")
+    ap.add_argument("--meta-for", type=int, default=None,
+                    help="这些内容属于第几首（0 基）；默认=第一个 WAV 的序号")
+    ap.add_argument("--prefill", type=float, default=0.0,
+                    help="开播前不按节拍预灌多少秒音频（默认 0=关闭）。"
+                         "实测一次性灌 21KB 会让设备 USB OUT 端点卡死 -> Write timeout，别随便开")
+    ap.add_argument("--playlist", action="store_true",
+                    help="自动用本工程 Tools/pl01.wav..plNN.wav（按序号排序），忽略 -f")
     args = ap.parse_args()
 
     playlist = args.file
+    if args.playlist:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        playlist = sorted(glob.glob(os.path.join(root, "Tools", "pl[0-9][0-9].wav")))
+        if not playlist:
+            print("没找到 Tools/pl01.wav ... plNN.wav")
+            return 2
 
     # ---- 校验所有 WAV 格式一致 ----
     nch = fr = sw = None
@@ -217,18 +479,20 @@ def main():
     bytes_per_sec = nch * sw * fr  # 2*2*44100 = 176400 B/s（标称）
     eff_rate = bytes_per_sec * args.rate
 
-    # ---- 峰值扫描 + 增益提示 ----
+    # ---- 峰值扫描 + 逐曲算增益（软膝限幅兜底）----
+    args.gains = {}
     for path in playlist:
         peak = scan_peak(path)
-        print("源文件峰值: %s = %d (%.1f%% 满量程)" %
-              (os.path.basename(path), peak, (peak / 32768.0 * 100.0)))
-        # 仅在实际放大(gain>1)且会超顶时提示。
-        # peak 可能为 32768（即 -32768 的绝对值），gain=1.0 时并未削波，不应误报。
-        if args.gain > 1.0 and peak > 0 and peak * args.gain > 32767:
-            print("  ⚠ 增益 %.2fx 会超过满量程→削波(可能失真)。建议 --gain %.2f。" %
-                  (args.gain, 32767.0 / peak))
-    print("增益: %.2fx   列表: %d 首   循环=%s   rate=%.3f   自动找口=%s   等待设备=%s" %
-          (args.gain, len(playlist), not args.no_loop, args.rate, args.auto, args.wait), flush=True)
+        if args.no_norm:
+            g = args.gain
+        else:
+            g = gain_for_peak(peak, args.peak, args.gain)
+        args.gains[path] = g
+        print("源文件峰值: %s = %d (%.1f%% 满量程) -> 实际增益 %.2fx%s" %
+              (os.path.basename(path), peak, (peak / 32768.0 * 100.0), g,
+               "" if args.no_norm else "  (归一峰值 %.1fdBFS)" % args.peak))
+    print("增益: 见上   列表: %d 首   循环=%s   rate=%.3f   自动找口=%s   等待设备=%s" %
+          (len(playlist), not args.no_loop, args.rate, args.auto, args.wait), flush=True)
 
     tail_silence = b"\x00" * (nch * sw * fr)          # 收尾 1 秒静音
     gap_silence = b"\x00" * (nch * sw * fr // 10)     # 曲目间隔 100ms 静音

@@ -40,11 +40,12 @@
 #define LCD_KEEP_ALL_IC   0
 #endif
 
-/* 关闭 ASCII 字模（asc2_1608, 95x16=1520B）及其绘制函数代码。
- * 本工程屏上只画中文歌词，ASCII 无用途；Keil MDK-Lite 只有 32KB。
- * 需要显示英文/数字时改为 1 即可恢复（lcd_show_char/num/string 同时回来）。 */
+/* ASCII 字模（asc2_1608, 95x16=1520B）及其绘制函数。
+ * 2026-11-14：界面要显示英文歌名/歌手/时间（Scared 2 Be Lonely / Lil Tjay），
+ * 且 Keil 已授权（不再有 32KB 限制），恢复为 1。
+ * lcd_ui.c 直接 extern 引用 asc2_1608 做任意整数倍放大，不调用 lcd_show_char。 */
 #ifndef LCD_KEEP_ASCII_FONT
-#define LCD_KEEP_ASCII_FONT   0
+#define LCD_KEEP_ASCII_FONT   1
 #endif
 
 #include "stdlib.h"

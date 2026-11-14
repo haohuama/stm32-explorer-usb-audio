@@ -18,6 +18,7 @@
 #include "usb_device.h"   /* hUsbDeviceFS */
 #include "i2s_audio.h"    /* audio_stream_push() */
 #include "lcd_ui.h"       /* lcd_ui_select_song()：用 DTR/RTS 选曲 */
+#include "cdc_ctrl.h"     /* 控制模式：收歌词/封面帧 */
 
 /* 前向声明：USBD_CDC_fops_FS 初始化器在下方引用，必须在之前可见 */
 static int8_t CDC_Init_FS(void);
@@ -87,6 +88,14 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t *pbuf, uint16_t length)
       if (linecoding.bitrate >= 100000u && linecoding.bitrate < (100000u + 16u)) {
         lcd_ui_select_song((uint8_t)(linecoding.bitrate - 100000u));
       }
+      else if (linecoding.bitrate == CDC_CTRL_BAUD) {
+        /* 200000：进入控制模式，接下来下行的数据是「歌词/封面」帧而不是 PCM */
+        cdc_ctrl_set_enabled(1);
+      }
+      else if (linecoding.bitrate == 115200u) {
+        /* 回到默认波特率：退出控制模式，恢复纯 PCM */
+        cdc_ctrl_set_enabled(0);
+      }
       break;
 
     case CDC_SET_CONTROL_LINE_STATE:
@@ -118,12 +127,75 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t *pbuf, uint16_t length)
 }
 
 /* ---- OUT 端点收到数据：先把 PCM 字节灌进环形缓冲，再重新武装 OUT 端点 ----
- * 注意顺序：先 copy 再 PrepareReceive，否则下一包可能覆盖 UserRxBufferFS。 */
+ * 注意顺序：先 copy 再 PrepareReceive，否则下一包可能覆盖 UserRxBufferFS。
+ * 控制模式下（波特率 200000）改成往帧解析器里送，一帧没收完就先不 arm → 天然流控。 */
 static int8_t CDC_Receive_FS(uint8_t *Buf, uint32_t *Len)
 {
-  audio_stream_push(Buf, *Len);
-  USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+  if (cdc_ctrl_enabled())
+  {
+    cdc_ctrl_feed(Buf, *Len);
+    if (!cdc_ctrl_frame_pending())
+    {
+      USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+    }
+  }
+  else
+  {
+    audio_stream_push(Buf, *Len);
+    USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+  }
   return (0);
+}
+
+/* 供 cdc_ctrl.c 在主循环消费完一帧后重新放行 OUT 端点 */
+void CDC_CTRL_Rearm(void)
+{
+  USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+}
+
+/* ---- 给上位机发 1 字节命令（按键 → 电脑）----
+ * 上位机用 --keys 起一个读线程才会收到；没人读时返回 busy，直接丢弃，
+ * 不影响下行 PCM（IN/OUT 是两个方向，互不阻塞）。 */
+static uint8_t          s_cmd_buf[4];
+static volatile uint8_t s_cmd_busy;
+
+/* 2 字节上行命令：'S' + 曲目绝对索引(0 基)。
+ * 屏上切歌时用，电脑端据此跳到对应 WAV，做到「切到哪首歌词就唱哪首」。 */
+int CDC_Cmd_Send2(uint8_t c, uint8_t d)
+{
+  if (s_cmd_busy || hUsbDeviceFS.pClass == NULL) return -1;
+  s_cmd_buf[0] = c;
+  s_cmd_buf[1] = d;
+  s_cmd_busy = 1;
+  if (USBD_CDC_SetTxBuffer(&hUsbDeviceFS, s_cmd_buf, 2) != USBD_OK)
+  {
+    s_cmd_busy = 0;
+    return -2;
+  }
+  if (USBD_CDC_TransmitPacket(&hUsbDeviceFS) != USBD_OK)
+  {
+    s_cmd_busy = 0;
+    return -3;
+  }
+  return 0;
+}
+
+int CDC_Cmd_Send(uint8_t c)
+{
+  if (s_cmd_busy || hUsbDeviceFS.pClass == NULL) return -1;
+  s_cmd_buf[0] = c;
+  s_cmd_busy = 1;
+  if (USBD_CDC_SetTxBuffer(&hUsbDeviceFS, s_cmd_buf, 1) != USBD_OK)
+  {
+    s_cmd_busy = 0;
+    return -2;
+  }
+  if (USBD_CDC_TransmitPacket(&hUsbDeviceFS) != USBD_OK)
+  {
+    s_cmd_busy = 0;
+    return -3;
+  }
+  return 0;
 }
 
 static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
@@ -131,6 +203,7 @@ static int8_t CDC_TransmitCplt_FS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
+  s_cmd_busy = 0;
   return (0);
 }
 

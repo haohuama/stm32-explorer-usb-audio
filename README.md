@@ -33,13 +33,18 @@
 - 欠载时"有多少填多少 + 补零"，避免整段静音跳变
 - 上位机脚本：绝对时间匀速发送（消除 sleep 累积误差）、数字增益、写超时自愈重连
 
-**LCD 歌词（本仓库新增）**
+**LCD 播放界面（本仓库新增）**
 
-- 上电点亮 4.3" 屏，**全屏 32px 大字**（16×16 点阵按 2×2 像素块放大，不额外占 Flash）
-- 8 行滚动、当前行黄色高亮 + 左侧指示条，**只在换行时重画**，不进任何中断、不抢音频总线
-- 中文走内置 GBK 点阵（`cn_font.h`，由 PC 端脚本按"实际用到的字"生成，零外部字库依赖）
+- 上电点亮 4.3" 屏，**上半屏 = 封面 + 歌曲信息，下半屏 = 歌词**
+  - 左侧 240×240 专辑封面（RGB565，`cover_img.h`），右侧在"照片模糊底"上叠歌名(32px)/歌手/进度条/时间
+  - 该曲没有封面数据时，封面槽里画竖向渐变 + 居中大号曲目序号占位，不留黑块
+- 歌词区滚动显示，当前条黄色高亮 + 左侧指示条，**只在换行/秒变化时重画**，不进任何中断、不抢音频总线
+- **双语歌词**：一条记录里原文(32px)与译文(16px)成对显示（英文歌自动配对中文翻译，`\x01` 分隔）
+- 中文走内置 GBK 点阵（`cn_font.h`），ASCII 走驱动自带 `asc2_1608`，两者都按整数倍放大
 - **歌词与歌声同一基准**：时间 = 真实 PCM 已播字节数 ÷ 176400 B/s，静音不计时，卡顿自动停住
-- **播放列表 4 首**，歌词数据在 `User/Hardware/LCD/lrc_data.h`（脚本生成）
+- **播放列表 5 首**，歌词数据在 `User/Hardware/LCD/lrc_data.h`、封面在 `cover_img.h`（均由脚本生成）
+- **上电默认停在第 5 首**（带封面那张，`lcd_ui.c` 的 `UI_DEFAULT_SONG`），一开机就能看到封面+歌词；
+  上位机一发数据就按文件名 `plNN` 自动切曲
 - **曲目切换由上位机告知**：`ser.baudrate = 100000 + idx` → CDC `SET_LINE_CODING`，
   占 **0 字节音频带宽**，任意顺序 / 单曲循环 / 晚点开播都不会错位
 
@@ -55,42 +60,57 @@
 - 工具链：Keil MDK（ARMCLANG V6.16），工程文件 `Projects/MDK-ARM/atk_f407.uvprojx`
 - 依赖：STM32F4 HAL（`HAL_PCD` / `stm32f4xx_ll_usb` / `HAL_SD` / `ll_sdmmc` / `HAL_SRAM` / `ll_fsmc`）、
   ST USB Device Library（Core + CDC class）、ChaN FatFs R0.14b
-- 步骤：Keil 打开工程 → **Clean → Rebuild** → ST-Link 烧录
+- 步骤：Keil 打开工程 → **Clean → Rebuild** → ST-Link 烧录 `Output/atk_f407.hex`
+
+不想开 IDE 时可以双击 `Tools/keil_rebuild.bat`（或命令行 `UV4.exe -r Projects\MDK-ARM\atk_f407.uvprojx -j0 -o Output\rebuild_all.txt`），
+全量编译结果会写到 `Output/rebuild_all.txt`。**当前实测（2026-11-14）**：
+
+```
+Program Size: Code=27140 RO-data=247248 RW-data=536 ZI-data=57480
+"..\..\Output\atk_f407.axf" - 0 Error(s), 0 Warning(s).
+```
 
 > **关于 32KB 限制**：未授权的 Keil MDK-Lite 会把 image 卡在 32768 字节。
-> 本工程当前 ROM ≈ 49.7KB，**需要 Keil MDK-Community（学生/非商业免费，无代码大小限制）**：
-> `File → License Management → User-Based Activation → License Server: https://mdk-preview.keil.arm.com`。
-> 相关踩坑与可逆裁剪开关见 `docs/`。
+> 本工程 ROM ≈ 268KB，**必须用已授权的 Keil**（MDK-Community 学生/非商业免费：
+> `File → License Management → User-Based Activation → License Server: https://mdk-preview.keil.arm.com`）。
+> 授权后代码里那些 32KB 裁剪开关（`LCD_KEEP_ASCII_FONT` / `lcd.h LCD_KEEP_ALL_IC` / `ffconf.h FF_USE_LFN`）都可以改回去。
 
 ## 使用
 
-1. 烧录固件
+1. 烧录固件（`Output/atk_f407.hex`）
 2. 用**能传数据**的 USB 线把电脑连到板载 **USB_SLAVE** 口（跳线置 USB 侧）
 3. 设备管理器「端口」出现 **`USB 串行设备 (COMx)`**（首次可能需拔插一次）
 4. 装依赖：`pip install pyserial`
-5. 把 **44.1kHz / 16bit / 立体声** WAV 放进 `Tools/`（MP3 需先转 WAV，可用 `Tools/loud_master.py`）
+5. WAV 放 `Tools/pl01.wav ... plNN.wav`（44.1kHz / 16bit / 立体声；MP3 用
+   `ffmpeg -i 歌.mp3 -ar 44100 -ac 2 -acodec pcm_s16le Tools/plNN.wav`）
 6. 播放（脚本按 VID/PID 自动找口，掉线/复位自动重连续播）：
    ```
-   py Tools/host_cdc_sender.py --auto --wait -f Tools/pl01.wav --gain 0.65
+   py Tools/host_cdc_sender.py --auto --wait --playlist --gain 1.0
+   py Tools/host_cdc_sender.py --auto --wait -f Tools/pl05.wav --gain 1.0
    ```
    - `--gain N`：发送前数字增益（`1.0` = 不处理；源已满量程时别超 1.0，会削波）
    - `--rate R`：发送速率倍数（偶发断音调大、偶发爆音调小）
-   - `-f a.wav b.wav`：按顺序循环播放列表；`plNN.wav` 的尾部数字决定设备播第几首的歌词
+   - `-f a.wav b.wav`：按顺序循环播放列表；`plNN.wav` 的尾部数字决定设备播第几首（歌词/封面一起换）
+   - `--playlist`：自动按序号加载 `Tools/pl01..plNN.wav`
 
 > 只有一根 USB 线时：插 USB_SLAVE 即可（CH340 调试口可留空，不影响放音）。
+> 屏上效果可用 `py Tools/preview_ui.py --song 5 --time 01:10` 在电脑上先看。
 
-## 换歌词 / 换歌（不用改 C 代码）
+## 换歌词 / 换歌 / 换封面（不用改 C 代码）
 
 ```bat
-py Tools/lrc_playlist.py "歌1.lrc" "歌2.lrc" "歌3.lrc" "歌4.lrc"   :: 生成 lrc_data.h
+py Tools/gen_cover.py "封面.jpg" --song 5                        :: 可选：照片 -> cover_img.h
+py Tools/lrc_playlist.py Tools/lyrics/pl01.lrc ... pl05.lrc      :: 生成 lrc_data.h（最多 5 首）
 py Tools/gen_cn_font.py                                          :: 只渲染用到的汉字
 py Tools/check_lrc.py                                            :: 用与 C 相同规则模拟解析，须 0 空行
 py Tools/check_font.py                                           :: 须"缺字:无"
 py Tools/build_check.py --microlib                               :: 编译+链接+报体积
 ```
 
-然后把同名 MP3 转成 `plNN.wav`（序号与 lrc 顺序一致），重新 Rebuild 烧录即可。
-详见 `docs/LCD歌词界面_模块1集成说明.md` 的 §10 / §13 / §14。
+歌词源文件统一放 `Tools/lyrics/plNN.lrc`（带 `[ti:]`/`[ar:]` 最好）；
+`Tools/lrc_extract.py` 可以从已生成的 `lrc_data.h` 反推回 `.lrc`。
+序号必须与 `Tools/plNN.wav` 对应，改完重新 Rebuild 烧录。
+详见 `docs/LCD播放界面_封面与双语歌词_实施说明.md`。
 
 ## 目录结构
 
@@ -99,7 +119,8 @@ User/               应用层
   main.c            启动流程（I2S → WM8978 → 流播放 → USB CDC → LCD）
   Hardware/AUDIO/   i2s_audio.c/.h：环形缓冲 + DMA 双缓冲 + 播放位置 API
   Hardware/WM8978/  CODEC 驱动（I2C 软件模拟）
-  Hardware/LCD/     lcd.c/h(正点原子 HAL 版) + lcd_ui.c(歌词界面) + cn_font.h/lrc_data.h(生成)
+  Hardware/LCD/     lcd.c/h(正点原子 HAL 版) + lcd_ui.c(封面/歌词界面)
+                    + cn_font.h(生成 655 字) / lrc_data.h / cover_img.h(生成)
   Hardware/SDIO/    轮询式 SD 卡 BSP（P2.1）
   APP/              audio_source(切源契约) / wav_probe(WAV 头解析) / p2_selftest(TF 卡自检)
 Middlewares/USB/    ST USB 设备库(Core+CDC) + USB_APP 适配层
@@ -107,15 +128,19 @@ Middlewares/FATFS/  ChaN FatFs R0.14b + 自写 diskio
 Drivers/            STM32F4 HAL + CMSIS
 Projects/MDK-ARM/   Keil 工程
 Tools/              上位机与生成脚本
-  host_cdc_sender.py  匀速发 PCM（增益/限幅/自动找口/断线重连/选曲）
-  lrc_playlist.py     多个 .lrc → lrc_data.h
+  host_cdc_sender.py  匀速发 PCM（增益/限幅/自动找口/断线重连/选曲/--playlist）
+  lrc_playlist.py     多个 .lrc → lrc_data.h（双语配对/歌名歌手/时长）
   gen_cn_font.py      渲染精简 GBK 点阵 → cn_font.h
+  gen_cover.py        照片 → cover_img.h（240×240 封面 + 400×120 模糊底）
+  preview_ui.py       按固件真实点阵渲染 800×480 界面预览 PNG
+  lrc_extract.py      从 lrc_data.h 反推 .lrc 源文件
   check_lrc.py        模拟 C 解析器校验歌词
   check_font.py       校验歌词用字是否都在字库里
   build_check.py      按 uvprojx 清单全量编译 + 链接 + 报体积
+  keil_rebuild.bat    一键全量编译（不打开 IDE），日志 Output/rebuild_all.txt
   gen_test_wav.py     生成测试音；loud_master.py 转 WAV + 响度处理
   _onetime/           历史一次性补丁脚本（保留作过程记录）
-docs/               开发过程与技术文档（硬件核对、I2S/WM8978、CDC、LCD 歌词、TF 卡自检等）
+docs/               开发过程与技术文档（硬件核对、I2S/WM8978、CDC、LCD 封面/歌词、TF 卡自检等）
 REPRODUCE.md        陌生人复现指南
 NOTICE.md           第三方组件许可证
 ```
@@ -130,6 +155,70 @@ NOTICE.md           第三方组件许可证
 
 ## 配套开发技能
 
-本项目的板级踩坑经验已整理成可复用技能包（独立私有仓库）：
+本项目的板级踩坑经验已整理成可复用技能包：
 **`stm32f407-explorer-audio`** —— 板级事实表、Keil 循环包含/缺源文件/32KB 授权、
 CDC 枚举与描述符修复、流式音频缓冲设计、LCD 中文歌词流水线。
+副本已随本仓库收录在 `ProjectNotes/技能包/`。
+
+---
+
+## 当前状态（2026-11-14，以下为准）
+
+> 上面「特性」「目录」等章节写于早期阶段；**当前实现以本节为准**。
+
+### 版式与内容
+
+- **左 1/3 = 封面 + 歌名/歌手/进度条/时间/音量 + 三个触屏按钮，右 2/3 = 歌词**
+- 当前唱的那一句**固定在歌词区垂直正中**，上方回填唱过的、下方排没唱的
+- 6 首曲目；**上电默认第 6 首《忘不掉的你》**；没有单独封面的曲目统一用漫画封面
+- 40px 原生字模（汉字 40×40、ASCII 20×40），长句自动折两行
+- 英文歌去掉中文译文；封面是亮图，文字用局部磨砂底 + 描边，不铺大块黑底
+
+### 两个播放器
+
+| 入口 | 说明 |
+|---|---|
+| **桌面快捷方式 `STM32 音乐播放器`** | `DesktopPlayer/`，Tkinter。导入音乐/歌词/封面、播放暂停切歌、拖动进度、0.5~2.0x 倍速（可选保持音调）、0~100 音量、桌面滚动歌词。**双击即用，无黑框** |
+| `Tools\play.bat` | 命令行推流，排错/备用 |
+
+> 串口独占，两者不能同时运行。`py DesktopPlayer/app.py --selftest` 可离线自检。
+
+### 歌词同步与切歌
+
+- 设备歌词时间轴 = **收到的真实 PCM 字节数 / 176400**，与声音同源
+- seek / 换倍速 / 切歌时桌面软件下发 `T_POS` 帧同步基准（按倍速缩放）
+- **屏上按 KEY0/KEY2 或触屏切歌，会发 `'S'+idx` 通知电脑跳到对应 WAV** ——
+  「切到哪首歌词就唱哪首」，不再只换屏不换声
+- 详见 `docs/歌词音频同步_屏上切歌换歌_实施说明.md`
+
+### 键位（0~100 音量）
+
+| 键 | 功能 |
+|---|---|
+| KEY0 = PE4 | 下一首 |
+| KEY2 = PE2 | 上一首 |
+| KEY1 = PE3 | 音量 −（每次 1，长按 60ms 连发） |
+| WK_UP = PA0 | 音量 +（**高电平有效，必须 PULLDOWN**） |
+| 屏幕三按钮 | ⏮ / ⏸▶ / ⏭ |
+
+⚠️ **触屏尚未在真机验证通过**：驱动、按钮、诊断都在固件里，但 5 个引脚是原理图推断、
+校准是猜的。烧录后按屏幕看串口 `[TP] x= y= raw=` 与每 3 秒的 `TP: pen=/ok=/bad=`，
+判读表见 `docs/居中歌词_封面去黑底_0到100音量_触屏诊断.md`。
+
+### 构建与验证
+
+```bat
+Tools\keil_rebuild.bat              :: Keil 命令行全量编译（0 Error 0 Warning）
+py Tools\verify_sync.py             :: 离线验证切歌/时间轴协议（不占串口）
+py Tools\preview_new.py --song 6 --time 01:10 --out docs\img\final_v3_s6.png
+py DesktopPlayer\app.py --selftest  :: 桌面软件自检
+```
+
+### 目录补充
+
+```
+DesktopPlayer/     桌面控制台（app.py + core_*.py + 图标/快捷方式脚本 + README）
+ProjectNotes/      今日日志、长期约定、工作区技术资料、技能包副本（见其 README）
+docs/img/          界面预览图（索引见 docs/img/README.md）
+```
+

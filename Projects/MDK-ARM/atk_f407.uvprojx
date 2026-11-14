@@ -37,7 +37,7 @@
           <bCustSvd>0</bCustSvd>
           <UseEnv>0</UseEnv>
           <BinPath></BinPath>
-          <IncludePath>..\..\Drivers\STM32F4xx_HAL_Driver\Inc;..\..\Drivers\CMSIS\Device\ST\STM32F4xx\Include;..\..\Drivers\CMSIS\Include;..\..\Drivers\SYSTEM\sys;..\..\Drivers\SYSTEM\usart;..\..\Drivers\SYSTEM\delay;..\..\Drivers\BSP\LED;..\..\Drivers\BSP\BEEP;..\..\Drivers;..\..\User;..\..\User\Hardware;..\..\User\Hardware\WM8978;..\..\User\Hardware\AUDIO;../../Middlewares/USB/STM32_USB_Device_Library/Core/Inc;../../Middlewares/USB/STM32_USB_Device_Library/Class/Inc;../../Middlewares/USB/USB_APP;../../Middlewares/FATFS;../../User/Hardware/SDIO;../../User/APP;../../User/Hardware/LCD</IncludePath>
+          <IncludePath>..\..\Drivers\STM32F4xx_HAL_Driver\Inc;..\..\Drivers\CMSIS\Device\ST\STM32F4xx\Include;..\..\Drivers\CMSIS\Include;..\..\Drivers\SYSTEM\sys;..\..\Drivers\SYSTEM\usart;..\..\Drivers\SYSTEM\delay;..\..\Drivers\BSP\LED;..\..\Drivers\BSP\BEEP;..\..\Drivers;..\..\User;..\..\User\Hardware;..\..\User\Hardware\WM8978;..\..\User\Hardware\AUDIO;../../Middlewares/USB/STM32_USB_Device_Library/Core/Inc;../../Middlewares/USB/STM32_USB_Device_Library/Class/Inc;../../Middlewares/USB/USB_APP;../../Middlewares/FATFS;../../User/Hardware/SDIO;../../User/APP;../../User/Hardware/LCD;..\..\User\Hardware\KEY;..\..\User\Hardware\TOUCH</IncludePath>
           <LibPath></LibPath>
           <RegisterFilePath></RegisterFilePath>
           <DBRegisterFilePath></DBRegisterFilePath>
@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>..\..\Drivers\STM32F4xx_HAL_Driver\Inc;..\..\Drivers\CMSIS\Device\ST\STM32F4xx\Include;..\..\Drivers\CMSIS\Include;..\..\Drivers\SYSTEM\sys;..\..\Drivers\SYSTEM\usart;..\..\Drivers\SYSTEM\delay;..\..\Drivers\BSP\LED;..\..\Drivers\BSP\BEEP;..\..\Drivers;..\..\User;..\..\User\Hardware;..\..\User\Hardware\WM8978;..\..\User\Hardware\AUDIO;../../Middlewares/USB/STM32_USB_Device_Library/Core/Inc;../../Middlewares/USB/STM32_USB_Device_Library/Class/Inc;../../Middlewares/USB/USB_APP;../../Middlewares/FATFS;../../User/Hardware/SDIO;../../User/APP;../../User/Hardware/LCD</IncludePath>
+              <IncludePath>..\..\Drivers\STM32F4xx_HAL_Driver\Inc;..\..\Drivers\CMSIS\Device\ST\STM32F4xx\Include;..\..\Drivers\CMSIS\Include;..\..\Drivers\SYSTEM\sys;..\..\Drivers\SYSTEM\usart;..\..\Drivers\SYSTEM\delay;..\..\Drivers\BSP\LED;..\..\Drivers\BSP\BEEP;..\..\Drivers;..\..\User;..\..\User\Hardware;..\..\User\Hardware\WM8978;..\..\User\Hardware\AUDIO;../../Middlewares/USB/STM32_USB_Device_Library/Core/Inc;../../Middlewares/USB/STM32_USB_Device_Library/Class/Inc;../../Middlewares/USB/USB_APP;../../Middlewares/FATFS;../../User/Hardware/SDIO;../../User/APP;../../User/Hardware/LCD;..\..\User\Hardware\KEY;..\..\User\Hardware\TOUCH</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -357,7 +357,7 @@
               <MiscControls></MiscControls>
               <Define></Define>
               <Undefine></Undefine>
-              <IncludePath></IncludePath>
+              <IncludePath>..\..\User\Hardware\KEY;..\..\User\Hardware\TOUCH</IncludePath>
             </VariousControls>
           </Aads>
           <LDads>
@@ -638,6 +638,11 @@
               <FileType>1</FileType>
               <FilePath>..\..\User\APP\wav_probe.c</FilePath>
             </File>
+            <File>
+              <FileName>cdc_ctrl.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\APP\cdc_ctrl.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -652,6 +657,26 @@
               <FileName>lcd_ui.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\Hardware\LCD\lcd_ui.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Hardware/KEY</GroupName>
+          <Files>
+            <File>
+              <FileName>key.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\Hardware\KEY\key.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Hardware/TOUCH</GroupName>
+          <Files>
+            <File>
+              <FileName>tp.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\User\Hardware\TOUCH\tp.c</FilePath>
             </File>
           </Files>
         </Group>
