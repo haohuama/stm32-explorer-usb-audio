@@ -25,6 +25,8 @@ __pycache__/
 Tools/*.wav
 Tools/*.mp3
 Tools/*.flac
+Tools/mcu/*.wav
+Tools/mcu/*.mp3
 
 # ===== 临时/系统 =====
 _*.txt            # 智能体排查用的临时探测文件（_p2.txt / _pnp*.txt 等）

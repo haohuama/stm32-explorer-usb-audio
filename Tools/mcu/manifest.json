@@ -1,0 +1,112 @@
+[
+  {
+    "idx": 1,
+    "src": "C:\\Users\\mhh20\\Downloads\\Scared 2 Be Lonely - Lil Tjay.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl01.wav",
+    "lrc": "C:\\stm32TEST\\Tools\\mcu\\pl01.lrc",
+    "title": "Scared 2 Be Lonely",
+    "artist": "Lil Tjay",
+    "duration_ms": 182206,
+    "bytes": 32141472
+  },
+  {
+    "idx": 2,
+    "src": "C:\\Users\\mhh20\\Downloads\\唯一 - G.E.M.邓紫棋.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl02.wav",
+    "lrc": "C:\\stm32TEST\\Tools\\mcu\\pl02.lrc",
+    "title": "唯一",
+    "artist": "G.E.M.邓紫棋",
+    "duration_ms": 253735,
+    "bytes": 44759044
+  },
+  {
+    "idx": 3,
+    "src": "C:\\Users\\mhh20\\Downloads\\坠落 - The Oddity.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl03.wav",
+    "lrc": "",
+    "title": "坠落",
+    "artist": "The Oddity",
+    "duration_ms": 276000,
+    "bytes": 48686536
+  },
+  {
+    "idx": 4,
+    "src": "C:\\Users\\mhh20\\Downloads\\坠落 - 蔡健雅.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl04.wav",
+    "lrc": "",
+    "title": "坠落",
+    "artist": "蔡健雅",
+    "duration_ms": 250118,
+    "bytes": 44121046
+  },
+  {
+    "idx": 5,
+    "src": "C:\\Users\\mhh20\\Downloads\\多想在平庸的生活拥抱你 - 隔壁老樊.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl05.wav",
+    "lrc": "",
+    "title": "多想在平庸的生活拥抱你",
+    "artist": "隔壁老樊",
+    "duration_ms": 269936,
+    "bytes": 47617034
+  },
+  {
+    "idx": 6,
+    "src": "C:\\Users\\mhh20\\Downloads\\忘不掉的你 - h3R3.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl06.wav",
+    "lrc": "C:\\stm32TEST\\Tools\\mcu\\pl06.lrc",
+    "title": "忘不掉的你",
+    "artist": "h3R3",
+    "duration_ms": 172173,
+    "bytes": 30371630
+  },
+  {
+    "idx": 7,
+    "src": "C:\\Users\\mhh20\\Downloads\\拉过勾的 - 陆虎.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl07.wav",
+    "lrc": "",
+    "title": "拉过勾的",
+    "artist": "陆虎",
+    "duration_ms": 218653,
+    "bytes": 38570588
+  },
+  {
+    "idx": 8,
+    "src": "C:\\Users\\mhh20\\Downloads\\江南 - 林俊杰.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl08.wav",
+    "lrc": "C:\\stm32TEST\\Tools\\mcu\\pl08.lrc",
+    "title": "江南",
+    "artist": "林俊杰",
+    "duration_ms": 267946,
+    "bytes": 47265950
+  },
+  {
+    "idx": 9,
+    "src": "C:\\Users\\mhh20\\Downloads\\泡沫 - Swang多雷.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl09.wav",
+    "lrc": "C:\\stm32TEST\\Tools\\mcu\\pl09.lrc",
+    "title": "泡沫",
+    "artist": "Swang多雷",
+    "duration_ms": 190171,
+    "bytes": 33546402
+  },
+  {
+    "idx": 10,
+    "src": "C:\\Users\\mhh20\\Downloads\\爱错(Live) - 王力宏.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl10.wav",
+    "lrc": "",
+    "title": "爱错(Live)",
+    "artist": "王力宏",
+    "duration_ms": 243530,
+    "bytes": 42959058
+  },
+  {
+    "idx": 11,
+    "src": "C:\\Users\\mhh20\\Downloads\\还是会想你 - 林达浪、h3R3.mp3",
+    "wav": "C:\\stm32TEST\\Tools\\mcu\\pl11.wav",
+    "lrc": "",
+    "title": "还是会想你",
+    "artist": "林达浪、h3R3",
+    "duration_ms": 190063,
+    "bytes": 33527298
+  }
+]

@@ -178,10 +178,24 @@ CDC 枚举与描述符修复、流式音频缓冲设计、LCD 中文歌词流水
 
 | 入口 | 说明 |
 |---|---|
-| **桌面快捷方式 `STM32 音乐播放器`** | `DesktopPlayer/`，Tkinter。导入音乐/歌词/封面、播放暂停切歌、拖动进度、0.5~2.0x 倍速（可选保持音调）、0~100 音量、桌面滚动歌词。**双击即用，无黑框** |
+| **桌面快捷方式 `STM32 音乐播放器`** | `DesktopPlayer/`，Tkinter，界面参考 macOS「音乐」App（Apple Music）：深色侧栏、大封面、歌词居中渐隐、底部细线控件，播放键颜色取自封面主色。导入音乐/歌词/封面、播放暂停切歌、拖动进度、0.5~2.0x 倍速（可选保持音调）、0~100 音量、桌面滚动歌词。**双击即用，无黑框** |
 | `Tools\play.bat` | 命令行推流，排错/备用 |
 
 > 串口独占，两者不能同时运行。`py DesktopPlayer/app.py --selftest` 可离线自检。
+
+### mp3 → 板子格式（Tools/mcu/）
+
+板子没有 mp3 解码器，I2S 恒定按 **44.1kHz / 16bit / 立体声（176400 B/s）** 消费 PCM，
+所以 mp3 必须先转码。批量工具：
+
+```bat
+py Tools\convert_mp3.py            :: 扫描下载目录 mp3 -> Tools\mcu\plNN.wav + 配对 lrc + manifest.json
+py Tools\convert_mp3.py --dry-run  :: 只预览
+```
+
+转换做三件事：重采样 44.1k、混成立体声、加 -1 dBFS 峰值限制器（防 mp3 源削顶后推流爆音）。
+底层在 `DesktopPlayer/core_mcu.py`。当前 `Tools/mcu/` 已备好 **11 首**（音频大文件不入库）。
+详见 `docs/MP3转换_苹果风UI_实施说明.md`。
 
 ### 歌词同步与切歌
 
