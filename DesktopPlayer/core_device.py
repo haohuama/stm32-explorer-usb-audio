@@ -130,7 +130,10 @@ class Device(object):
         self._need()
         n = len(payload)
         hdr = b"ATK" + bytes([ftype, n & 0xFF, (n >> 8) & 0xFF])
-        self.ser.write(hdr + payload)
+        try:
+            self.ser.write(hdr + payload)
+        except serial.SerialException as e:
+            raise DeviceError("写控制帧失败：%s" % e)
 
     # ------------------------------------------------------------ 选曲
     def select_slot(self, idx):
@@ -201,7 +204,14 @@ class Device(object):
     # ------------------------------------------------------------ 音频
     def write_pcm(self, data):
         self._need()
-        self.ser.write(data)
+        try:
+            self.ser.write(data)
+        except serial.SerialException as e:
+            # SerialTimeoutException 也属于 SerialException：
+            # 必须转成 DeviceError，播放线程的 except DeviceError 分支
+            # 才会 close + 重连；否则会卡死在
+            # 「播放线程异常: Write timeout」的无限循环里。
+            raise DeviceError("写 PCM 失败：%s" % e)
 
     def read_byte(self):
         """读一个 CDC IN 字节；没数据返回 None（超时 50ms）。"""

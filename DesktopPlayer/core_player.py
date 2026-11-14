@@ -18,6 +18,7 @@ import wave
 from array import array
 
 import core_track as T
+import serial                                  # SerialTimeoutException
 from core_device import (Device, DeviceError, find_port, port_conflicts,
                          kill_port_conflicts)
 
@@ -394,8 +395,16 @@ class Player(object):
                             time.sleep(0.5)
                             continue
                     self.device.write_pcm(out)
-                except DeviceError:
-                    self.log("写入失败（设备掉线？）重连中…")
+                except (DeviceError, serial.SerialTimeoutException) as e:
+                    # 写超时 = 设备不再消费 PCM（板子死机/没跑音频固件/USB 卡死）。
+                    # 必须立刻关闭串口再重连：握着僵死的句柄会把 usbser.sys 卡住，
+                    # 之后 COM6 会一直「拒绝访问」，只能拔插 USB 重新枚举。
+                    self.log("写入失败/超时（%s），设备疑似不消费数据 → "
+                             "关闭串口重连；若反复出现请按板子 RESET 或重插 USB_SLAVE" % e)
+                    try:
+                        self.device.close()
+                    except Exception:
+                        pass
                     self._reconnect()
                     continue
 
